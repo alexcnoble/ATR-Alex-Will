@@ -3,7 +3,8 @@ The files in this repository include the code and data files for the Weighted-KN
 
 Steps for Executing the Scripts:
 * Clone this repository onto your machine. (Or download each file individually)
-    - Ensure that all of the following code (.m) files are in the same directory as all of the data files (.txt for ASTER, .csv for KLUM).
+* To download the ASTER and KLUM data, navigate to this link: https://drive.google.com/file/d/1WB4BsC5ZTwgXtZGSInrfv6KFG4XthUvU/view?usp=sharing
+    - Ensure that all of the following code (.m) files are in the same directory as all of the data files (.txt for ASTER, .csv for KLUM). To do this, extract the .zip from the Google Drive link above and simply place all of the code files in the extracted folder.
     - Main driver files that are to be executed include:
         - knnMainKLUM.m
         - knnMainSyntheticKLUM.m
