@@ -2,23 +2,19 @@
 
 Authors: Alex Noble & William Collins
 
-Classes for Classification:
-- Manmade, Silicate Minerals, Other Minerals, Rock, Vegetation, Non-Photosynthetic Vegetation, and Other (Soil/Water).
-
-The purpose of this script is to act as the main driver and:
-- Call functions to read in the ASTER and KLUM data sets.
-- Call functions to filter the bad data out and format the good data for use in the Random Forest (treebagger) model.
-- Call SMOTE to create synthetic data for under-represented classes (manmade,
-    non-photosynthetic vegetation, other) and add this synthetic data to the training
-    data.
+The purpose of this script is to:
+- Read in the ASTER and KLUM data sets.
+- Filter the bad data out and format the good data for use in the Weighted-KNN model.
 - Call weighted KNN to predict the class of the test data and calculate
     accuracy, precision, recall, and F1-Score based on it's predictions.
 
 %}
 
-% Clear workspace and command window.
+
+% Clear workspace, command window, and figures.
 clear
 clc
+close all
 
 % Set path and directory for reading files.
 path = pwd;
@@ -34,7 +30,7 @@ rockFiles = {};
 meteoriteFiles = {};
 otherFiles = {};
 
-% Set file counts to 0 for each file group.
+% Set counts to 0 for each file group
 manmadeCount = 0;
 mineralSilicateCount = 0;
 mineralOtherCount = 0;
@@ -94,6 +90,7 @@ end
 % Read in KLUM dataset and set klumCount to number of files. (Calls readKlum function)
 [klumWavelength, klumReflectivity] = readKlum();
 klumCount = size(klumReflectivity,1);
+
 
 % Create and pre-allocate cell arrays for wavelength and reflectivity data
 % for each class.
@@ -224,7 +221,6 @@ wavelengthMatrix = [manmadeWavelengthMatrix; mineralOtherWavelengthMatrix; miner
 % high. Calls sortData function.)
 [wavelengthMatrix, dataMatrix] = sortData(dataMatrix, wavelengthMatrix, wavelengths);
 
-
 % Create synthetic data for manmade, other, and NPS vegetation classes.
 % (Calls smote function).
 % Parameter 1: Original reflectivities for the respective class.
@@ -237,165 +233,149 @@ wavelengthMatrix = [manmadeWavelengthMatrix; mineralOtherWavelengthMatrix; miner
 [syntheticOtherReflectivity] = smote(otherReflectivityMatrix, 1, 300, wavelengths);
 [syntheticNPSVegetationReflectivity] = smote(npsVegetationReflectivityMatrix, 1, 200, wavelengths);
 
+% Define the number of folds for k-fold cross-validation
+% 5 folds is 80/20 split
+numFolds = 5;
 
-% Define the ratio for splitting into train and test data.
-training_ratio = 0.8;
-testing_ratio = 0.2;
+% Create data and identity cell arrays to hold data for all folds
+allDataMatrix = dataMatrix;
+allIdentityMatrix = identityMatrix;
 
-% Create data and identity cell arrays to hold data for training and testing
-trainingData = {};
-testingData = {};
+% Generate a k-fold partition for the data
+c = cvpartition(length(dataMatrix),'KFold', numFolds);
 
-trainingIdentityMatrix = {};
-testingIdentityMatrix = {};
+% Initialize variables to collect overall results
+overallAccuracy = zeros(numFolds, 1);
+confusionMatrices = cell(numFolds, 1);
 
-% Generate a random partition for the data
-c = cvpartition(length(dataMatrix),'HoldOut', testing_ratio);
+% Process each fold
+for fold = 1:numFolds
+    % Indexes for training and testing sets in this fold
+    trainingIndexes = training(c, fold);
+    testingIndexes = test(c, fold);
 
-% Indexes for training and testing sets
-trainingIndexes = training(c);
-testingIndexes = ~training(c);
+    % Initialize data structures for this fold's training and testing data
+    trainingDataMatrix = {};
+    testingDataMatrix = {};
+    trainingIdentityMatrix = {};
+    testingIdentityMatrix = {};
+    k = 1;
+    l = 1;
+    for i = 1:length(dataMatrix)
+        if (trainingIndexes(i) == 1)
+            for j = 1:length(wavelengths)
+                trainingDataMatrix{k,j} = dataMatrix{i, j};
+                trainingIdentityMatrix{k, 1} = identityMatrix{i, 1};
+            end
+            k = k + 1;
+        elseif (testingIndexes(i) == 1)
+            for j = 1:length(wavelengths)
+                testingDataMatrix{l,j} = dataMatrix{i, j};
+                testingIdentityMatrix{l, 1} = identityMatrix{i, 1};
+            end
+            l = l + 1;
+        end
+    end
 
-% Split data into training and testing based on indexes from random partition.
-k = 1;
-l = 1;
-for i = 1:length(dataMatrix)
-    if (trainingIndexes(i) == 1)
-        for j = 1:length(wavelengths)
-            trainingDataMatrix{k,j} = dataMatrix{i, j};
-            trainingIdentityMatrix{k, 1} = identityMatrix{i, 1};
+    % Create variables to hold the number of rows and columns in training and
+    % testing data.
+    [numRowsTraining, numColTraining] = size(trainingDataMatrix);
+    [numRowsTesting, numColTesting] = size(testingDataMatrix);
+
+    % Add Synthetic Manmade data to trainingData matrix.
+    k = 1;
+    for i = length(trainingDataMatrix) + 1:(length(trainingDataMatrix) + length(syntheticManmadeReflectivity))
+        for j = 1:numColTraining
+            trainingData(i, j) = syntheticManmadeReflectivity{k, j};
         end
         k = k + 1;
+        trainingIdentity(i, 1) = 1;
     end
 
-     if (testingIndexes(i) == 1)
-        for j = 1:length(wavelengths)
-            testingDataMatrix{l, j} = dataMatrix{i, j};
-            testingIdentityMatrix{l, 1} = identityMatrix{i, 1};
+    for i = 1:numRowsTesting
+        for j = 1:numColTesting
+            testingData(i, j) = testingDataMatrix{i, j};
         end
-        l = l + 1;
+        testingIdentity(i, 1) = testingIdentityMatrix{i, 1};
     end
+
+    % Add Synthetic Other data to trainingData matrix.
+    k = 1;
+    for i = length(trainingData) + 1:(length(trainingData) + length(syntheticOtherReflectivity))
+        for j = 1:numColTraining
+            trainingData(i, j) = syntheticOtherReflectivity{k, j};
+        end
+        k = k + 1;
+        trainingIdentity(i, 1) = 7;
+    end
+
+    for i = 1:numRowsTesting
+        for j = 1:numColTesting
+            testingData(i, j) = testingDataMatrix{i, j};
+        end
+        testingIdentity(i, 1) = testingIdentityMatrix{i, 1};
+    end
+
+    % Add Synthetic NPS Vegetation data to trainingData matrix.
+    k = 1;
+    for i = length(trainingData) + 1:(length(trainingData) + length(syntheticNPSVegetationReflectivity))
+        for j = 1:numColTraining
+            trainingData(i, j) = syntheticNPSVegetationReflectivity{k, j};
+        end
+        k = k + 1;
+        trainingIdentity(i, 1) = 4;
+    end
+
+    % Convert cell arrays to matrices
+    trainingData = cell2mat(trainingDataMatrix);
+    trainingIdentity = cell2mat(trainingIdentityMatrix);
+    testingData = cell2mat(testingDataMatrix);
+    testingIdentity = cell2mat(testingIdentityMatrix);
+
+    % Set parameters for KNNWeightedModel call.
+    k = 1;
+    r = 1;
+    weights = 'gaussian';
+    % Call KNNWeightedModel passing in the trainingData and identity matrices
+    % and the parameters defined above.
+    % weights: gaussian, inverse, quadratic, or triangular.
+    knn = KNNWeightedModel(trainingData, trainingIdentity, k, r, weights);
+
+    % Holds the weighted KNN's predictions for each test point.
+    yogurt = knn.predict(testingData);
+
+    % Evaluate the model's performance on this fold
+    predictionMat = testingIdentity == yogurt;
+    accuracy = mean(predictionMat) * 100;
+    overallAccuracy(fold) = accuracy;
+    confusionMatrices{fold} = confusionmat(testingIdentity, yogurt);
+
+    % Calculate Individual Precision/Recall for each class, Overall Precision/Recall, and F1-Score for each fold.
+    disp(['Individual Precision/Recall for each class, Overall Precision/Recall, and F1-Score for Kfold: ', num2str(fold)]);
+    Ct = confusionMatrices{fold}';
+    diagonal = diag(Ct);
+    sumOfRows = sum(Ct, 2);
+
+    precision = diagonal ./ sumOfRows
+    overallPrecision = mean(precision)
+
+    sumOfCols = sum(Ct, 1);
+
+    recall = diagonal ./ sumOfCols'
+    overallRecall = mean(recall)
+
+    f1Score = (2 * (overallPrecision * overallRecall) / (overallPrecision + overallRecall))
 end
 
-% Create variables to hold the number of rows and columns in training and
-% testing data.
-[numRowsTraining, numColTraining] = size(trainingDataMatrix);
-[numRowsTesting, numColTesting] = size(testingDataMatrix);
+% Average accuracy over all folds
+meanAccuracy = mean(overallAccuracy);
 
-% Pre-allocating trainingData and testingData matrices with zero's based on
-% the number of rows and cols respectively.
-trainingData = zeros(numRowsTraining, numColTraining);
-trainingIdentity = zeros(numRowsTraining, 1);
-testingData = zeros(numRowsTesting, numColTesting);
-testingIdentity = zeros(numRowsTesting, 1);
-
-% Loop through each cell in trainingDataMatrix and assign its value to the 
-% corresponding element in the numeric cell arrays.
-for i = 1:length(trainingDataMatrix)
-    for j = 1:numColTraining
-        trainingData(i, j) = trainingDataMatrix{i, j};
-    end
-    trainingIdentity(i, 1) = trainingIdentityMatrix{i, 1};
+% Display mean accuracy for all folds
+disp(['Mean Classification Accuracy across all folds: ', num2str(meanAccuracy)]);
+% Display confusion matrices for each fold
+for fold = 1:numFolds
+    figure;
+    labels = ["Manmade", "Mineral: Non-Silicate", "Mineral: Silicate", "Vegetation: NPS", "Vegetation", "Rock", "Other"];
+    confusionchart(confusionMatrices{fold}, labels);
+    title(['Confusion Matrix for Fold ', num2str(fold)]);
 end
-
-% Add Synthetic Manmade data to trainingData matrix.
-k = 1;
-for i = length(trainingDataMatrix) + 1:(length(trainingDataMatrix) + length(syntheticManmadeReflectivity))
-    for j = 1:numColTraining
-        trainingData(i, j) = syntheticManmadeReflectivity{k, j};
-    end
-    k = k + 1;
-    trainingIdentity(i, 1) = 1;
-end
-
-for i = 1:numRowsTesting
-    for j = 1:numColTesting
-        testingData(i, j) = testingDataMatrix{i, j};
-    end
-    testingIdentity(i, 1) = testingIdentityMatrix{i, 1};
-end
-
-% Add Synthetic Other data to trainingData matrix.
-k = 1;
-for i = length(trainingData) + 1:(length(trainingData) + length(syntheticOtherReflectivity))
-    for j = 1:numColTraining
-        trainingData(i, j) = syntheticOtherReflectivity{k, j};
-    end
-    k = k + 1;
-    trainingIdentity(i, 1) = 7;
-end
-
-for i = 1:numRowsTesting
-    for j = 1:numColTesting
-        testingData(i, j) = testingDataMatrix{i, j};
-    end
-    testingIdentity(i, 1) = testingIdentityMatrix{i, 1};
-end
-
-% Add Synthetic NPS Vegetation data to trainingData matrix.
-k = 1;
-for i = length(trainingData) + 1:(length(trainingData) + length(syntheticNPSVegetationReflectivity))
-    for j = 1:numColTraining
-        trainingData(i, j) = syntheticNPSVegetationReflectivity{k, j};
-    end
-    k = k + 1;
-    trainingIdentity(i, 1) = 4;
-end
-
-% Convert testing data and testing identity cell arrays to matrices.
-for i = 1:numRowsTesting
-    for j = 1:numColTesting
-        testingData(i, j) = testingDataMatrix{i, j};
-    end
-    testingIdentity(i, 1) = testingIdentityMatrix{i, 1};
-end
-
-
-% Set parameters for KNNWeightedModel call. 
-k = 1;
-r = 1;
-weights = 'gaussian';
-
-% Call KNNWeightedModel passing in the trainingData and identity matrices
-% and the parameters defined above.
-% weights: gaussian, inverse, quadratic, or triangular.
-knn = KNNWeightedModel(trainingData, trainingIdentity, k, r, weights);
-
-% Holds the weighted KNN's predictions for each test point.
-yogurt = knn.predict(testingData);
-
-% Initialize predictionMat to the size of the rows in testingData
-% matrix and pre-allocate it with zeros.
-predictionMat = zeros(size(testingData, 1), 1);
-
-% Loop through number of test points and set predictionMat value to 1 for
-% correct predictions. Compares true identity to predicted identity at each
-% index.
-for i = 1:size(testingData, 1)
-    if (testingIdentity(i, 1) == yogurt(i, 1))
-        predictionMat(i, 1) = 1;
-    end
-end
-
-% Calculate overall classification accuracy
-accuracy = (sum(predictionMat)/size(predictionMat, 1)) * 100
-
-% Create and display confusion chart.
-labels = ["Manmade", "Mineral: Non-Silicate", "Mineral: Silicate", "Vegetation: NPS", "Vegetation", "Rock", "Other"]; 
-C = confusionmat(testingIdentity, yogurt);
-confusionchart(C,labels)
-
-% Calculate Individual Precision/Recall for each class, Overall Precision/Recall, and F1-Score.
-Ct = C';
-diagonal = diag(Ct);
-sumOfRows = sum(Ct, 2);
-
-precision = diagonal ./ sumOfRows
-overallPrecision = mean(precision)
-
-sumOfCols = sum(Ct, 1);
-
-recall = diagonal ./ sumOfCols'
-overallRecall = mean(recall)
-
-f1Score = (2 * (overallPrecision * overallRecall) / (overallPrecision + overallRecall))
